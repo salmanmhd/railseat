@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { format } from "date-fns";
 import { ArrowLeftRight, Calendar as CalendarIcon, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { SearchResultPayload } from "@/lib/irctc-engine";
+import type { SearchProgress, SearchResultPayload } from "@/lib/irctc-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { Logo } from "@/components/logo";
@@ -30,6 +30,14 @@ export interface SearchRequest {
   quotaCode: string;
   minCoveragePct: number;
   allowStitch: boolean;
+  /** Also look for journeys with one change. */
+  connections: boolean;
+}
+
+export interface SearchContext {
+  onNotice: (message: string | null) => void;
+  onProgress: (progress: SearchProgress) => void;
+  signal: AbortSignal;
 }
 
 export interface FillFields {
@@ -48,7 +56,7 @@ export interface SessionConfig {
 
 interface RailSearchProps {
   /** Runs the search. Throw an Error with a readable message on failure. */
-  search: (req: SearchRequest, onNotice: (message: string | null) => void) => Promise<SearchResultPayload>;
+  search: (req: SearchRequest, ctx: SearchContext) => Promise<SearchResultPayload>;
   session?: SessionConfig;
 }
 
@@ -100,7 +108,10 @@ export function RailSearch({ search, session }: RailSearchProps) {
   const [isSearching, setIsSearching] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [results, setResults] = useState<SearchResultPayload | null>(null);
-  const [searchCount, setSearchCount] = useState(0);
+  const [runId, setRunId] = useState(0);
+  const [connections, setConnections] = useState(true);
+  const [progress, setProgress] = useState<{ label: string; done: number; total: number } | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const [searchedRoute, setSearchedRoute] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [showSession, setShowSession] = useState(false);
@@ -120,9 +131,18 @@ export function RailSearch({ search, session }: RailSearchProps) {
   };
 
   const handleSearch = async () => {
+    const controller = new AbortController();
+    abortRef.current = controller;
     setIsSearching(true);
     setErrorMsg(null);
     setResults(null);
+    setProgress(null);
+    setRunId((n) => n + 1);
+    setSearchedRoute(
+      `${source} to ${destination} · ${selectedDate ? format(selectedDate, "EEE, d MMM") : ""} · ${classCodes
+        .map((code) => CLASSES.find((c) => c.code === code)?.name ?? code)
+        .join(" & ")}`,
+    );
     setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 
     const dateStr = selectedDate ? format(selectedDate, "yyyyMMdd") : "20261024";
@@ -130,35 +150,40 @@ export function RailSearch({ search, session }: RailSearchProps) {
     try {
       const parts: SearchResultPayload[] = [];
       for (const classCode of classCodes) {
-        parts.push(
-          await search(
-            {
-              source,
-              destination,
-              date: dateStr,
-              classCode,
-              preferredTime,
-              quotaCode,
-              minCoveragePct,
-              allowStitch,
+        const className = CLASSES.find((c) => c.code === classCode)?.name ?? classCode;
+        const prefix = classCodes.length > 1 ? `${className}: ` : "";
+        const res = await search(
+          {
+            source,
+            destination,
+            date: dateStr,
+            classCode,
+            preferredTime,
+            quotaCode,
+            minCoveragePct,
+            allowStitch,
+            connections,
+          },
+          {
+            onNotice: setNotice,
+            signal: controller.signal,
+            onProgress: (p) => {
+              setProgress({ label: prefix + PHASE_LABELS[p.phase], done: p.done, total: p.total });
+              setResults(mergeResults([...parts, p.partial]));
             },
-            setNotice,
-          ),
+          },
         );
+        parts.push(res);
+        setResults(mergeResults(parts));
+        if (res.cancelled) break;
       }
-      const data = mergeResults(parts);
-      setResults(data);
-      setSearchCount((n) => n + 1);
-      setSearchedRoute(
-        `${source} to ${destination} · ${selectedDate ? format(selectedDate, "EEE, d MMM") : ""} · ${
-          classCodes.map((code) => CLASSES.find((c) => c.code === code)?.name ?? code).join(" & ")
-        }`,
-      );
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong while searching.");
     } finally {
       setIsSearching(false);
       setNotice(null);
+      setProgress(null);
+      abortRef.current = null;
     }
   };
 
@@ -294,6 +319,21 @@ export function RailSearch({ search, session }: RailSearchProps) {
           </div>
 
           {showMore && (
+            <div className="space-y-3">
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-muted/60 p-4">
+              <input
+                type="checkbox"
+                checked={connections}
+                onChange={(e) => setConnections(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <span>
+                <span className="block text-sm font-medium">Include journeys with one change</span>
+                <span className="block text-sm text-muted-foreground">
+                  Finds two trains with seats confirmed on both. Uses more requests, so searches take longer.
+                </span>
+              </span>
+            </label>
             <div className="rounded-xl bg-muted/60 p-4">
               <div className="flex items-baseline justify-between gap-4">
                 <label htmlFor="coverage" className="text-sm font-medium">
@@ -314,6 +354,7 @@ export function RailSearch({ search, session }: RailSearchProps) {
                 onChange={(e) => setMinCoveragePct(Number(e.target.value))}
                 className="h-1 w-full cursor-pointer appearance-none rounded-sm bg-border accent-primary"
               />
+            </div>
             </div>
           )}
 
@@ -346,26 +387,58 @@ export function RailSearch({ search, session }: RailSearchProps) {
             </div>
           )}
 
-          {isSearching && notice && (
-            <p role="status" className="text-sm text-muted-foreground">
-              {notice}
-            </p>
+          {isSearching && (
+            <div className="space-y-2" role="status">
+              <div className="flex items-center justify-between gap-4 text-sm">
+                <span className="text-muted-foreground">
+                  {notice ??
+                    (progress
+                      ? `${progress.label}${progress.total > 0 ? ` · ${progress.done} of ${progress.total}` : ""}`
+                      : "Starting…")}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => abortRef.current?.abort()}
+                  className="shrink-0 rounded-lg px-2 py-1 font-medium text-primary hover:bg-primary/10"
+                >
+                  Stop
+                </button>
+              </div>
+              <div className="h-1 overflow-hidden rounded-sm bg-muted">
+                <div
+                  className="h-full rounded-sm bg-primary transition-[width] duration-300"
+                  style={{ width: `${progress && progress.total > 0 ? Math.round((progress.done / progress.total) * 100) : 4}%` }}
+                />
+              </div>
+            </div>
           )}
 
-          {isSearching && <ResultsSkeleton />}
+          {isSearching && !results && <ResultsSkeleton />}
 
           {results && (
             <>
               <div>
                 <h2 className="text-2xl font-semibold tracking-tight">
-                  {total === 0 ? "No seats found" : `${total} ${total === 1 ? "option" : "options"}`}
+                  {total === 0
+                    ? isSearching
+                      ? "Searching…"
+                      : "No seats found"
+                    : `${total} ${total === 1 ? "option" : "options"}${isSearching ? " so far" : ""}`}
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  {searchedRoute} · {results.trainsAnalyzed} trains checked
+                  {searchedRoute} · {results.trainsAnalyzed} {results.trainsAnalyzed === 1 ? "train" : "trains"} checked
                 </p>
+                {!isSearching && results.truncated && (
+                  <p className="mt-1 text-sm text-warning">
+                    Stopped at the request limit to avoid overloading IRCTC, so some trains were not fully checked.
+                  </p>
+                )}
+                {!isSearching && results.cancelled && (
+                  <p className="mt-1 text-sm text-muted-foreground">Search stopped. Showing what was found so far.</p>
+                )}
               </div>
               <SearchResults
-                key={searchCount}
+                key={runId}
                 results={results}
                 windowLabel={windowLabel}
                 minCoveragePct={minCoveragePct}
@@ -379,6 +452,12 @@ export function RailSearch({ search, session }: RailSearchProps) {
 }
 
 const MAX_CLASSES = 2;
+
+const PHASE_LABELS: Record<SearchProgress["phase"], string> = {
+  direct: "Checking trains",
+  deep: "Looking for partial rides",
+  connections: "Looking for journeys with one change",
+};
 
 function PickerTrigger({ id, label, children }: { id: string; label: string; children: React.ReactNode }) {
   return (
@@ -458,6 +537,8 @@ function mergeResults(parts: SearchResultPayload[]): SearchResultPayload {
     totalApiCalls: parts.reduce((n, p) => n + p.totalApiCalls, 0),
     trainsAnalyzed: parts.reduce((n, p) => n + p.trainsAnalyzed, 0),
     preferredTimeWindow: parts[0]?.preferredTimeWindow,
+    truncated: parts.some((p) => p.truncated),
+    cancelled: parts.some((p) => p.cancelled),
   };
 }
 

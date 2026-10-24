@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowRight, Check, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SearchOption, SearchResultPayload } from "@/lib/irctc-engine";
@@ -63,12 +63,19 @@ export function SearchResults({
 
   const firstWithItems = tabs.find((t) => t.items.length > 0)?.key ?? "window";
   const [active, setActive] = useState<TabKey>(firstWithItems);
+  const userPicked = useRef(false);
+
+  // While results stream in, follow the first tab that has something, until the user picks one.
+  const activeIsEmpty = tabs.find((t) => t.key === active)?.items.length === 0;
+  useEffect(() => {
+    if (!userPicked.current && activeIsEmpty) setActive(firstWithItems);
+  }, [activeIsEmpty, firstWithItems]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const current = tabs.find((t) => t.key === active) ?? tabs[0];
 
   const copy = (o: SearchOption) => {
-    navigator.clipboard.writeText(o.trainNo);
+    navigator.clipboard.writeText(o.trainNo.replace(" + ", ", "));
     setCopiedKey(optionKey(o));
     setTimeout(() => setCopiedKey(null), 2000);
   };
@@ -86,7 +93,10 @@ export function SearchResults({
             role="tab"
             type="button"
             aria-selected={active === t.key}
-            onClick={() => setActive(t.key)}
+            onClick={() => {
+              userPicked.current = true;
+              setActive(t.key);
+            }}
             className={cn(
               "flex min-w-0 flex-col items-center rounded-lg px-2 py-2 text-sm font-medium transition-colors sm:flex-row sm:justify-center sm:gap-2",
               active === t.key
@@ -153,11 +163,25 @@ function ResultRow({
 
       {/* Train */}
       <p className="text-sm text-muted-foreground">
-        <span className="font-medium text-foreground">{o.trainName}</span>
-        <span className="tabular-nums"> · {o.trainNo}</span> · {o.classCode}
+        {o.isStitched ? (
+          <>
+            <span className="font-medium text-foreground">One change</span> · {o.classCode}
+          </>
+        ) : (
+          <>
+            <span className="font-medium text-foreground">{o.trainName}</span>
+            <span className="tabular-nums"> · {o.trainNo}</span> · {o.classCode}
+          </>
+        )}
       </p>
 
       {/* Seat coverage */}
+      {o.isStitched ? (
+        <p className="text-sm">
+          <span className="font-medium">Confirmed seats on both trains</span>
+          <span className="text-muted-foreground"> · {o.totalDuration} in total</span>
+        </p>
+      ) : (
       <div className="space-y-2">
         <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
           <div className="h-full rounded-sm bg-primary" style={{ width: `${reservedWidth}%` }} />
@@ -179,23 +203,31 @@ function ResultRow({
           )}
         </p>
       </div>
+      )}
 
       {o.legs && o.legs.length > 0 && (
-        <ol className="space-y-1 rounded-xl bg-muted/60 p-3 text-sm">
-          {o.legs.map((leg, i) => (
-            <li key={i} className="flex flex-wrap items-baseline justify-between gap-x-3">
-              <span>
-                <span className="tabular-nums">{leg.trainNo}</span>
-                <span className="text-muted-foreground">
-                  {" "}
-                  · {leg.from} to {leg.to} · {leg.depTime}
-                </span>
-              </span>
-              <span className="text-muted-foreground">
-                {leg.fare} · {leg.status}
-              </span>
-            </li>
-          ))}
+        <ol className="divide-y divide-border rounded-xl bg-muted/60 text-sm">
+          {o.legs.map((leg, i) => {
+            const legStatus = describeStatus(leg.status);
+            return (
+              <li key={i} className="flex items-start justify-between gap-3 p-3">
+                <div className="min-w-0">
+                  <p className="truncate">
+                    <span className="font-medium">{leg.trainName ?? leg.trainNo}</span>
+                    <span className="tabular-nums text-muted-foreground"> · {leg.trainNo}</span>
+                  </p>
+                  <p className="text-muted-foreground">
+                    {leg.from} {leg.depTime} to {leg.to}
+                    {leg.arrTime ? ` ${leg.arrTime}` : ""}
+                  </p>
+                </div>
+                <div className="shrink-0 text-right">
+                  <p className="tabular-nums">{leg.fare}</p>
+                  <p className={cn(toneClass[legStatus.tone])}>{legStatus.label}</p>
+                </div>
+              </li>
+            );
+          })}
         </ol>
       )}
 

@@ -15,6 +15,7 @@ export async function POST(req: NextRequest) {
       quotaCode = "GN",
       minCoveragePct = 50,
       allowStitch = true,
+      connections = false,
       customHeaders,
     } = body;
 
@@ -52,6 +53,7 @@ export async function POST(req: NextRequest) {
       quotaCode: quotaCode.toUpperCase().trim(),
       minCoveragePct: Number(minCoveragePct) || 50,
       allowStitch: Boolean(allowStitch),
+      connections: Boolean(connections),
     });
 
     console.log(`[API /api/search] Search done: ${result.matchesTime.length} in-window, ${result.outsideTime.length} out-window, ${result.worstCase.length} fallback. Calls: ${result.totalApiCalls}`);

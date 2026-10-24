@@ -13,7 +13,12 @@ function isThrottled(r: TabResponse) {
   return r.status === 429 || r.status === 503 || (r.status >= 400 && THROTTLE_TEXT.test(r.body.slice(0, 500)));
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve) => {
+    if (signal?.aborted) return resolve();
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
+  });
 
 /**
  * Wraps the raw tab fetch in a polite, adaptive queue: one request at a time,
@@ -21,7 +26,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * pushes back. The gap widens after each push-back and relaxes after a run of
  * clean responses, so a search settles at whatever pace IRCTC tolerates.
  */
-export function createLimitedFetch(raw: RawFetch, onNotice: (message: string | null) => void): typeof fetch {
+export function createLimitedFetch(
+  raw: RawFetch,
+  onNotice: (message: string | null) => void,
+  signal?: AbortSignal,
+): typeof fetch {
   let gap = MIN_GAP_MS;
   let cleanStreak = 0;
   let lastRequestAt = 0;
@@ -29,8 +38,10 @@ export function createLimitedFetch(raw: RawFetch, onNotice: (message: string | n
 
   const run = async (url: string, method: string, headers: Record<string, string>, body?: string) => {
     for (let attempt = 0; ; attempt++) {
+      if (signal?.aborted) throw new Error("SEARCH_CANCELLED");
       const wait = lastRequestAt + gap + Math.random() * JITTER_MS - Date.now();
-      if (wait > 0) await sleep(wait);
+      if (wait > 0) await sleep(wait, signal);
+      if (signal?.aborted) throw new Error("SEARCH_CANCELLED");
 
       const res = await raw(url, method, headers, body);
       lastRequestAt = Date.now();
@@ -54,7 +65,7 @@ export function createLimitedFetch(raw: RawFetch, onNotice: (message: string | n
       const backoff = Number.isFinite(retryAfterMs) ? retryAfterMs : gap * 2 ** attempt;
       const seconds = Math.ceil(backoff / 1000);
       onNotice(`IRCTC asked us to slow down. Waiting ${seconds}s before continuing…`);
-      await sleep(backoff);
+      await sleep(backoff, signal);
     }
   };
 

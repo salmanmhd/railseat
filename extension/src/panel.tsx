@@ -1,21 +1,30 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { IRCTCSearchEngine, type SearchResultPayload } from "@/lib/irctc-engine";
-import { RailSearch, type SearchRequest } from "@/components/rail-search";
+import { RailSearch, type SearchContext, type SearchRequest } from "@/components/rail-search";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ensureIrctcTab, findIrctcTab, IRCTC_ORIGIN, tabFetch } from "./irctc-tab";
 import { createLimitedFetch } from "./limited-fetch";
+import { chromeScheduleStore } from "./schedule-store";
 
-async function search(
-  req: SearchRequest,
-  onNotice: (message: string | null) => void,
-): Promise<SearchResultPayload> {
-  const tabId = await ensureIrctcTab(onNotice);
-  const limited = createLimitedFetch((url, method, headers, body) => tabFetch(tabId, url, method, headers, body), onNotice);
-  const engine = new IRCTCSearchEngine({}, limited);
+// Upper bound on IRCTC requests per class searched.
+const MAX_CALLS = 150;
+
+async function search(req: SearchRequest, ctx: SearchContext): Promise<SearchResultPayload> {
+  const tabId = await ensureIrctcTab(ctx.onNotice);
+  const limited = createLimitedFetch(
+    (url, method, headers, body) => tabFetch(tabId, url, method, headers, body),
+    ctx.onNotice,
+    ctx.signal,
+  );
+  const engine = new IRCTCSearchEngine({}, limited, {
+    scheduleStore: chromeScheduleStore,
+    signal: ctx.signal,
+    onProgress: ctx.onProgress,
+  });
 
   try {
-    return await engine.search({ headers: {}, ...req });
+    return await engine.search({ headers: {}, ...req, maxCalls: MAX_CALLS });
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("AUTH_BLOCKED")) {
       throw new Error(
