@@ -14,20 +14,20 @@ export function ThemeToggle() {
 
   if (!mounted) {
     return (
-      <div className="h-8 w-8 rounded-full bg-neutral-100 dark:bg-neutral-800 animate-pulse" />
+      <div className="h-8 w-8 rounded-lg bg-muted" />
     );
   }
 
   return (
-    <div className="flex items-center p-0.5 rounded-full bg-neutral-200/60 dark:bg-neutral-800/80 border border-black/[0.04] dark:border-white/[0.06] backdrop-blur">
+    <div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
       <button
         type="button"
         onClick={() => setTheme("light")}
         aria-label="Light mode"
-        className={`p-1.5 rounded-full transition-all duration-200 ${
+        className={`rounded-md p-1.5 transition-colors ${
           theme === "light"
-            ? "bg-white text-neutral-900 shadow-sm shadow-black/5"
-            : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200"
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
         }`}
       >
         <Sun className="h-3.5 w-3.5" />
@@ -36,10 +36,10 @@ export function ThemeToggle() {
         type="button"
         onClick={() => setTheme("system")}
         aria-label="System theme"
-        className={`p-1.5 rounded-full transition-all duration-200 ${
+        className={`rounded-md p-1.5 transition-colors ${
           theme === "system"
-            ? "bg-white dark:bg-neutral-700 text-neutral-900 dark:text-neutral-100 shadow-sm shadow-black/5"
-            : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200"
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
         }`}
       >
         <Laptop className="h-3.5 w-3.5" />
@@ -48,10 +48,10 @@ export function ThemeToggle() {
         type="button"
         onClick={() => setTheme("dark")}
         aria-label="Dark mode"
-        className={`p-1.5 rounded-full transition-all duration-200 ${
+        className={`rounded-md p-1.5 transition-colors ${
           theme === "dark"
-            ? "bg-neutral-700 text-white shadow-sm shadow-black/5"
-            : "text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200"
+            ? "bg-card text-foreground shadow-sm"
+            : "text-muted-foreground hover:text-foreground"
         }`}
       >
         <Moon className="h-3.5 w-3.5" />
