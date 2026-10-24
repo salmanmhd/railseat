@@ -12,7 +12,6 @@ import {
   AlertCircle,
   Copy,
   Check,
-  Sparkles,
   Sliders,
   ChevronDown,
   ChevronUp,
@@ -23,10 +22,12 @@ import {
   RotateCcw,
   Armchair,
 } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { parseCurlCommand } from "@/lib/curl-parser";
 import { SearchOption, SearchResultPayload } from "@/lib/irctc-engine";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
 
 const DEFAULT_SAMPLE_CURL = `curl --url 'https://www.irctc.co.in/eticketing/protected/mapps1/avlFarenquiry/13052/20261025/CDG/DLI/SL/GN/N' \\
@@ -161,8 +162,8 @@ export default function Home() {
         <div className="max-w-5xl mx-auto px-5 sm:px-8 h-16 flex items-center justify-between">
           {/* Logo / Product Name */}
           <div className="flex items-center gap-3">
-            <div className="h-9 w-9 rounded-2xl bg-gradient-to-b from-blue-500 to-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-              <Train className="h-4.5 w-4.5" />
+            <div className="h-9 w-9 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-xs">
+              <Train className="h-5 w-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
@@ -311,13 +312,18 @@ export default function Home() {
               </label>
               <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
                 <PopoverTrigger asChild>
-                  <button
-                    type="button"
-                    className="w-full bg-neutral-100/80 dark:bg-neutral-800/60 hover:bg-neutral-100 dark:hover:bg-neutral-800/80 rounded-2xl px-4 py-2.5 font-medium text-sm text-neutral-900 dark:text-white flex items-center justify-between text-left transition-all border border-transparent focus:outline-none focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
+                  <Button
+                    variant="outline"
+                    className={cn(
+                      "w-full justify-start text-left font-normal h-10 px-3 rounded-xl border border-black/[0.08] dark:border-white/[0.12] bg-white dark:bg-neutral-900 shadow-xs hover:bg-neutral-50 dark:hover:bg-neutral-800 transition-colors cursor-pointer",
+                      !selectedDate && "text-muted-foreground"
+                    )}
                   >
-                    <span>{selectedDate ? format(selectedDate, "EEE, d MMM yyyy") : "Select date"}</span>
-                    <CalendarIcon className="h-4 w-4 text-neutral-400" />
-                  </button>
+                    <CalendarIcon className="mr-2 h-4 w-4 text-neutral-500 dark:text-neutral-400" />
+                    <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                      {selectedDate ? format(selectedDate, "PPP") : "Pick a date"}
+                    </span>
+                  </Button>
                 </PopoverTrigger>
                 <PopoverContent align="start" className="w-auto p-0">
                   <Calendar
@@ -426,18 +432,15 @@ export default function Home() {
             <button
               onClick={handleSearch}
               disabled={isSearching}
-              className="bg-blue-600 hover:bg-blue-500 active:scale-[0.98] disabled:opacity-50 text-white font-medium px-8 py-3.5 rounded-full shadow-lg shadow-blue-500/20 hover:shadow-blue-500/30 transition-all flex items-center justify-center gap-2 cursor-pointer text-sm"
+              className="bg-blue-600 hover:bg-blue-700 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed text-white font-medium px-7 py-2.5 rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer text-sm"
             >
               {isSearching ? (
                 <>
                   <div className="h-4 w-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Scanning IRCTC Frontier...</span>
+                  <span>Scanning IRCTC...</span>
                 </>
               ) : (
-                <>
-                  <Sparkles className="h-4 w-4" />
-                  <span>Find Available Seats</span>
-                </>
+                <span>Find Available Seats</span>
               )}
             </button>
           </div>

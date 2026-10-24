@@ -4,6 +4,21 @@ All notable changes to the **RailSeat Agent** (`D:\playground\rail`) project are
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.2.1] - 2026-10-24
+
+### Changed
+- **Authentic Shadcn DatePicker**:
+  - Replaced custom pill button with standard shadcn `<Button variant="outline">` trigger displaying calendar icon on left and formatted date string (`format(date, "PPP")`).
+  - Restructured `components/ui/calendar.tsx` and `components/ui/popover.tsx` with authentic shadcn theme tokens, centered month/year header, outline navigation buttons, and table-aligned calendar grid.
+- **Button Styling**:
+  - Removed glowing colored drop-shadows (`shadow-blue-500/20`) and removed sparkle emoji icon from the search button for a minimal aesthetic.
+  - Streamlined navbar logo by removing glowing effects.
+
+### Added
+- **Matching Navicon / Favicon**:
+  - Created matching SVG train brand icon (`app/icon.svg` and `public/icon.svg`) matching the navbar logo.
+  - Updated metadata in `app/layout.tsx` to automatically serve the matching logo in browser tabs.
+
 ## [1.2.0] - 2026-10-24
 
 ### Added
