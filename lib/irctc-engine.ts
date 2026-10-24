@@ -93,7 +93,10 @@ export class IRCTCSearchEngine {
   private scheduleCache = new Map<string, TrainSchedule>();
   private availabilityCache = new Map<string, { status: string; fare: string }>();
 
-  constructor(headers: Record<string, string>) {
+  constructor(
+    headers: Record<string, string>,
+    private readonly doFetch: typeof fetch = (input, init) => fetch(input, init)
+  ) {
     this.headers = { ...headers };
   }
 
@@ -152,7 +155,7 @@ export class IRCTCSearchEngine {
     postHeaders["Content-Type"] = "application/json; charset=UTF-8";
 
     try {
-      const res = await fetch(url, {
+      const res = await this.doFetch(url, {
         method: "POST",
         headers: postHeaders,
         body: JSON.stringify(body),
@@ -194,7 +197,7 @@ export class IRCTCSearchEngine {
     if (this.headers["sec-ch-ua-mobile"]) getHeaders["sec-ch-ua-mobile"] = this.headers["sec-ch-ua-mobile"];
     if (this.headers["sec-ch-ua-platform"]) getHeaders["sec-ch-ua-platform"] = this.headers["sec-ch-ua-platform"];
 
-    const res = await fetch(url, { headers: getHeaders });
+    const res = await this.doFetch(url, { headers: getHeaders });
 
     if (!res.ok) {
       if (res.status === 401 || res.status === 403) throw new Error(`AUTH_BLOCKED_${res.status}`);
@@ -260,7 +263,7 @@ export class IRCTCSearchEngine {
     postHeaders["Accept"] = "application/json, text/plain, */*";
     postHeaders["Content-Type"] = "application/json; charset=UTF-8";
 
-    const res = await fetch(url, {
+    const res = await this.doFetch(url, {
       method: "POST",
       headers: postHeaders,
       body: JSON.stringify(body),

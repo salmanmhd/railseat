@@ -1,15 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { format, parse } from "date-fns";
-import { ArrowLeftRight, Calendar as CalendarIcon, ChevronDown, Train } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useState } from "react";
+import { parse } from "date-fns";
 import { parseCurlCommand } from "@/lib/curl-parser";
+import { RailSearch, type FillFields, type SearchRequest } from "@/components/rail-search";
 import type { SearchResultPayload } from "@/lib/irctc-engine";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Calendar } from "@/components/ui/calendar";
-import { ThemeToggle } from "@/components/theme-toggle";
-import { SearchResults } from "@/components/search-results";
 
 const DEFAULT_SAMPLE_CURL = `curl --url 'https://www.irctc.co.in/eticketing/protected/mapps1/avlFarenquiry/13052/20261025/CDG/DLI/SL/GN/N' \\
   -H 'accept: application/json, text/plain, */*' \\
@@ -25,547 +20,65 @@ const DEFAULT_SAMPLE_CURL = `curl --url 'https://www.irctc.co.in/eticketing/prot
   -H 'user-agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0' \\
   --data-raw '{"paymentFlag":"N","concessionBooking":false,"ftBooking":false,"loyaltyRedemptionBooking":false,"ticketType":"E","quotaCode":"GN","moreThanOneDay":true,"returnJourney":false,"trainNumber":"13052","fromStnCode":"CDG","toStnCode":"DLI","isLogedinReq":false,"journeyDate":"20261025","classCode":"SL"}'`;
 
-const STATION_SUGGESTIONS = [
-  ["PNBE", "Patna Junction"],
-  ["CDG", "Chandigarh"],
-  ["NDLS", "New Delhi"],
-  ["DLI", "Delhi Junction"],
-  ["ANVT", "Anand Vihar Terminal"],
-  ["DDU", "Pt. Deen Dayal Upadhyaya Jn"],
-  ["PRYJ", "Prayagraj Junction"],
-  ["UMB", "Ambala Cantt"],
-  ["HWH", "Howrah Junction"],
-];
-
-const TIME_PRESETS = [
-  { label: "Any time", value: "" },
-  { label: "Morning, 6 am to 12 pm", value: "06:00-12:00" },
-  { label: "Afternoon, 12 pm to 6 pm", value: "12:00-18:00" },
-  { label: "After 1 pm", value: "after 13:00" },
-  { label: "Evening, 6 pm to midnight", value: "18:00-24:00" },
-];
-
-const CLASSES = [
-  { code: "SL", name: "Sleeper" },
-  { code: "3A", name: "3 Tier AC" },
-  { code: "3E", name: "3 Tier AC Economy" },
-  { code: "2A", name: "2 Tier AC" },
-  { code: "1A", name: "First Class AC" },
-  { code: "CC", name: "Chair Car" },
-  { code: "2S", name: "Second Sitting" },
-];
-
-const fieldLabel = "mb-1.5 block text-sm font-medium text-muted-foreground";
-const fieldBase =
-  "w-full rounded-xl bg-muted px-4 text-foreground transition-colors placeholder:text-muted-foreground/70 hover:bg-muted/70 focus:bg-card focus:outline-2 focus:outline-primary";
-
 export default function Home() {
   const [curlInput, setCurlInput] = useState(DEFAULT_SAMPLE_CURL);
-  const [source, setSource] = useState("PNBE");
-  const [destination, setDestination] = useState("NDLS");
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date(2026, 9, 24));
-  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
-  const [classCode, setClassCode] = useState("SL");
-  const [preferredTime, setPreferredTime] = useState("after 13:00");
-  const [quotaCode] = useState("GN");
-  const [minCoveragePct, setMinCoveragePct] = useState(35);
-  const [allowStitch] = useState(true);
 
-  const [isSearching, setIsSearching] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [results, setResults] = useState<SearchResultPayload | null>(null);
-  const [searchCount, setSearchCount] = useState(0);
-  const [searchedRoute, setSearchedRoute] = useState("");
-  const [showCurlDrawer, setShowCurlDrawer] = useState(false);
-  const [showMore, setShowMore] = useState(false);
-  const [savedStatus, setSavedStatus] = useState<string | null>(null);
-  const [parsedSummary, setParsedSummary] = useState<{
-    hasCookie: boolean;
-    route?: string;
-    date?: string;
-    classCode?: string;
-  } | null>(null);
-  const resultsRef = useRef<HTMLDivElement>(null);
-
-  const applyParsedCurl = (raw: string, autoFill = true) => {
-    try {
-      const parsed = parseCurlCommand(raw);
-      const hasCookie = Boolean(parsed.cookie || parsed.headers["Cookie"] || parsed.headers["cookie"]);
-
-      let routeText: string | undefined;
-      if (parsed.detectedParams?.fromStnCode && parsed.detectedParams?.toStnCode) {
-        routeText = `${parsed.detectedParams.fromStnCode} → ${parsed.detectedParams.toStnCode}`;
-      }
-
-      setParsedSummary({
-        hasCookie,
-        route: routeText,
-        date: parsed.detectedParams?.journeyDate,
-        classCode: parsed.detectedParams?.classCode,
-      });
-
-      if (autoFill) {
-        if (parsed.detectedParams?.fromStnCode) setSource(parsed.detectedParams.fromStnCode);
-        if (parsed.detectedParams?.toStnCode) setDestination(parsed.detectedParams.toStnCode);
-        if (parsed.detectedParams?.journeyDate && /^\d{8}$/.test(parsed.detectedParams.journeyDate)) {
-          const d = parse(parsed.detectedParams.journeyDate, "yyyyMMdd", new Date());
-          if (!isNaN(d.getTime())) setSelectedDate(d);
-        }
-        if (parsed.detectedParams?.classCode) setClassCode(parsed.detectedParams.classCode);
-      }
-      return parsed;
-    } catch {
-      setParsedSummary(null);
-      return null;
-    }
+  const search = async (req: SearchRequest): Promise<SearchResultPayload> => {
+    const res = await fetch("/api/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ curlInput, ...req }),
+    });
+    const json = await res.json();
+    if (!res.ok || !json.success) throw new Error(json.message || "Failed to search train seats.");
+    return json.data;
   };
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("rail_irctc_curl");
-      if (stored) {
-        setCurlInput(stored);
-        applyParsedCurl(stored, false);
-      } else {
-        applyParsedCurl(DEFAULT_SAMPLE_CURL, false);
-      }
-    } catch {
-      // ignore in SSR / restricted storage
-    }
-  }, []);
-
-  const handleCurlChange = (val: string) => {
-    setCurlInput(val);
-    applyParsedCurl(val, true);
-  };
-
-  const handleSaveCurl = () => {
-    try {
-      localStorage.setItem("rail_irctc_curl", curlInput);
-    } catch {
-      // ignore
-    }
-    applyParsedCurl(curlInput, true);
-    setSavedStatus("Saved to browser");
-    setTimeout(() => setSavedStatus(null), 2500);
-  };
-
-  const handleResetCurl = () => {
-    setCurlInput(DEFAULT_SAMPLE_CURL);
-    try {
-      localStorage.removeItem("rail_irctc_curl");
-    } catch {
-      // ignore
-    }
-    applyParsedCurl(DEFAULT_SAMPLE_CURL, true);
-    setSavedStatus("Reset to default");
-    setTimeout(() => setSavedStatus(null), 2000);
-  };
-
-  const swapStations = () => {
-    setSource(destination);
-    setDestination(source);
-  };
-
-  const handleSearch = async () => {
-    setIsSearching(true);
-    setErrorMsg(null);
-    setResults(null);
-    setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
-
-    const dateStr = selectedDate ? format(selectedDate, "yyyyMMdd") : "20261024";
-
-    try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          curlInput,
-          source,
-          destination,
-          date: dateStr,
-          classCode,
-          preferredTime,
-          quotaCode,
-          minCoveragePct,
-          allowStitch,
-        }),
-      });
-
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        setErrorMsg(json.message || "Failed to search train seats.");
-      } else {
-        setResults(json.data);
-        setSearchCount((n) => n + 1);
-        setSearchedRoute(
-          `${source} to ${destination} · ${selectedDate ? format(selectedDate, "EEE, d MMM") : ""} · ${
-            CLASSES.find((c) => c.code === classCode)?.name ?? classCode
-          }`,
-        );
-      }
-    } catch (err: unknown) {
-      setErrorMsg(err instanceof Error ? err.message : "Network error contacting local search API.");
-    } finally {
-      setIsSearching(false);
-    }
-  };
-
-  const windowLabel =
-    TIME_PRESETS.find((p) => p.value === preferredTime)?.label.split(",")[0] ??
-    (preferredTime || "Any time");
-  const total = results ? results.matchesTime.length + results.outsideTime.length + results.worstCase.length : 0;
 
   return (
-    <div className="min-h-screen bg-background pb-24 text-foreground selection:bg-primary selection:text-white">
-      <header className="sticky top-0 z-40 bg-background/80 backdrop-blur-xl">
-        <div className="mx-auto flex h-14 max-w-3xl items-center justify-between px-5">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-white">
-              <Train className="h-4 w-4" aria-hidden />
+    <RailSearch
+      search={search}
+      session={{
+        label: "IRCTC session",
+        render: (fill) => (
+          <div className="space-y-3">
+            <div>
+              <h2 className="text-base font-semibold">IRCTC session</h2>
+              <p className="text-sm text-muted-foreground">
+                Paste a recent request copied from your browser&apos;s Network tab (Copy as cURL). Your route, date and
+                class are filled in from it.
+              </p>
             </div>
-            <span className="text-base font-semibold tracking-tight">RailSeat</span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setShowCurlDrawer(!showCurlDrawer)}
-              aria-expanded={showCurlDrawer}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
-            >
-              <span
-                className={cn(
-                  "h-2 w-2 rounded-full transition-colors",
-                  parsedSummary?.hasCookie ? "bg-emerald-500" : "bg-muted-foreground/30"
-                )}
-                aria-hidden
-              />
-              IRCTC session
-              <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showCurlDrawer && "rotate-180")} aria-hidden />
-            </button>
-            <ThemeToggle />
-          </div>
-        </div>
-      </header>
-
-      <main className="mx-auto max-w-3xl space-y-8 px-5 pt-8 sm:pt-14">
-        <div className="space-y-2">
-          <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">Find a confirmed seat.</h1>
-          <p className="text-lg text-muted-foreground">
-            Pick your route and date. We check every train and show where a seat is confirmed.
-          </p>
-        </div>
-
-        {showCurlDrawer && (
-          <div className="space-y-3 rounded-2xl bg-card p-5 animate-in fade-in-50 slide-in-from-top-2 duration-200">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-              <div>
-                <h2 className="text-base font-semibold">IRCTC session</h2>
-                <p className="text-sm text-muted-foreground">
-                  Paste a recent request copied from your browser&apos;s Network tab (Copy as cURL).
-                </p>
-              </div>
-              <div className="flex items-center gap-2 pt-1 sm:pt-0">
-                <button
-                  type="button"
-                  onClick={handleResetCurl}
-                  className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
-                >
-                  Reset
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveCurl}
-                  className="flex h-8 items-center justify-center rounded-lg bg-primary px-3.5 text-xs font-medium text-white transition-opacity hover:opacity-90 active:scale-[0.99] cursor-pointer"
-                >
-                  {savedStatus || "Save session"}
-                </button>
-              </div>
-            </div>
-
             <textarea
               rows={4}
               value={curlInput}
-              onChange={(e) => handleCurlChange(e.target.value)}
-              onPaste={(e) => {
-                const pasted = e.clipboardData.getData("text");
-                if (pasted) {
-                  setTimeout(() => handleCurlChange(pasted), 10);
-                }
+              onChange={(e) => {
+                setCurlInput(e.target.value);
+                fill(fieldsFromCurl(e.target.value));
               }}
               placeholder="curl --url 'https://www.irctc.co.in/...' -b '...'"
-              className={cn(fieldBase, "resize-none py-3 font-mono text-xs")}
+              className="w-full resize-none rounded-xl bg-muted px-4 py-3 font-mono text-xs text-foreground focus:bg-card focus:outline-2 focus:outline-primary"
             />
-
-            {/* Validation & Detected parameters feedback */}
-            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
-              <div className="flex flex-wrap items-center gap-2">
-                {parsedSummary?.hasCookie ? (
-                  <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
-                    Session cookie detected
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
-                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
-                    No Cookie found in this cURL
-                  </span>
-                )}
-
-                {parsedSummary?.route && (
-                  <span className="text-muted-foreground">
-                    Auto-filled: {parsedSummary.route}
-                    {parsedSummary.date ? ` · ${parsedSummary.date}` : ""}
-                    {parsedSummary.classCode ? ` · ${parsedSummary.classCode}` : ""}
-                  </span>
-                )}
-              </div>
-
-              {savedStatus && (
-                <span className="text-xs font-medium text-primary">
-                  {savedStatus}
-                </span>
-              )}
-            </div>
           </div>
-        )}
-
-        {/* Search form */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!isSearching) handleSearch();
-          }}
-          className="space-y-5 rounded-2xl bg-card p-5 sm:p-6"
-        >
-          <div className="grid gap-3 md:grid-cols-[1fr_auto_1fr] md:items-end">
-            <div>
-              <label htmlFor="from" className={fieldLabel}>
-                From
-              </label>
-              <input
-                id="from"
-                list="stations"
-                value={source}
-                onChange={(e) => setSource(e.target.value.toUpperCase())}
-                placeholder="Station code"
-                autoComplete="off"
-                className={cn(fieldBase, "h-12 text-lg font-semibold")}
-              />
-            </div>
-
-            <button
-              type="button"
-              onClick={swapStations}
-              aria-label="Swap stations"
-              className="mx-auto flex h-12 w-10 items-center justify-center rounded-xl text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            >
-              <ArrowLeftRight className="h-4 w-4 rotate-90 md:rotate-0" aria-hidden />
-            </button>
-
-            <div>
-              <label htmlFor="to" className={fieldLabel}>
-                To
-              </label>
-              <input
-                id="to"
-                list="stations"
-                value={destination}
-                onChange={(e) => setDestination(e.target.value.toUpperCase())}
-                placeholder="Station code"
-                autoComplete="off"
-                className={cn(fieldBase, "h-12 text-lg font-semibold")}
-              />
-            </div>
-            <datalist id="stations">
-              {STATION_SUGGESTIONS.map(([code, name]) => (
-                <option key={code} value={code}>
-                  {name}
-                </option>
-              ))}
-            </datalist>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-3">
-            <div>
-              <span className={fieldLabel}>Date</span>
-              <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
-                <PopoverTrigger asChild>
-                  <button type="button" className={cn(fieldBase, "flex h-11 items-center gap-2 text-left text-sm")}>
-                    <CalendarIcon className="h-4 w-4 text-muted-foreground" aria-hidden />
-                    {selectedDate ? format(selectedDate, "EEE, d MMM yyyy") : "Pick a date"}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent align="start" className="w-auto p-0">
-                  <Calendar
-                    mode="single"
-                    selected={selectedDate}
-                    onSelect={(d) => {
-                      if (d) {
-                        setSelectedDate(d);
-                        setIsCalendarOpen(false);
-                      }
-                    }}
-                  />
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            <SelectField id="class" label="Class" value={classCode} onChange={setClassCode}>
-              {CLASSES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.name} ({c.code})
-                </option>
-              ))}
-            </SelectField>
-
-            <SelectField id="time" label="Leaving" value={preferredTime} onChange={setPreferredTime}>
-              {TIME_PRESETS.map((p) => (
-                <option key={p.label} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-              {!TIME_PRESETS.some((p) => p.value === preferredTime) && (
-                <option value={preferredTime}>{preferredTime}</option>
-              )}
-            </SelectField>
-          </div>
-
-          {showMore && (
-            <div className="rounded-xl bg-muted/60 p-4">
-              <div className="flex items-baseline justify-between gap-4">
-                <label htmlFor="coverage" className="text-sm font-medium">
-                  Minimum trip covered
-                </label>
-                <span className="text-sm font-semibold tabular-nums">{minCoveragePct}%</span>
-              </div>
-              <p className="mb-3 text-sm text-muted-foreground">
-                Hide rides that cover less than this share of your journey. Lower it to see more partial options.
-              </p>
-              <input
-                id="coverage"
-                type="range"
-                min={20}
-                max={90}
-                step={5}
-                value={minCoveragePct}
-                onChange={(e) => setMinCoveragePct(Number(e.target.value))}
-                className="h-1 w-full cursor-pointer appearance-none rounded-sm bg-border accent-primary"
-              />
-            </div>
-          )}
-
-          <div className="flex items-center justify-between gap-4">
-            <button
-              type="button"
-              onClick={() => setShowMore(!showMore)}
-              aria-expanded={showMore}
-              className="flex items-center gap-1 rounded-lg py-1.5 text-sm font-medium text-primary hover:opacity-80"
-            >
-              {showMore ? "Fewer options" : "More options"}
-              <ChevronDown className={cn("h-4 w-4 transition-transform", showMore && "rotate-180")} aria-hidden />
-            </button>
-
-            <button
-              type="submit"
-              disabled={isSearching || !source || !destination}
-              className="flex h-11 min-w-36 items-center justify-center rounded-xl bg-primary px-6 text-base font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-            >
-              {isSearching ? "Searching…" : "Search"}
-            </button>
-          </div>
-        </form>
-
-        <div ref={resultsRef} className="scroll-mt-20 space-y-6 empty:hidden">
-          {errorMsg && (
-            <div role="alert" className="rounded-2xl bg-card p-5">
-              <h2 className="text-base font-semibold text-destructive">We couldn&apos;t complete the search</h2>
-              <p className="mt-1 text-sm text-muted-foreground">{errorMsg}</p>
-            </div>
-          )}
-
-          {isSearching && <ResultsSkeleton />}
-
-          {results && (
-            <>
-              <div>
-                <h2 className="text-2xl font-semibold tracking-tight">
-                  {total === 0 ? "No seats found" : `${total} ${total === 1 ? "option" : "options"}`}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {searchedRoute} · {results.trainsAnalyzed} trains checked
-                </p>
-              </div>
-              <SearchResults
-                key={searchCount}
-                results={results}
-                windowLabel={windowLabel}
-                minCoveragePct={minCoveragePct}
-              />
-            </>
-          )}
-        </div>
-      </main>
-    </div>
+        ),
+      }}
+    />
   );
 }
 
-function SelectField({
-  id,
-  label,
-  value,
-  onChange,
-  children,
-}: {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div>
-      <label htmlFor={id} className={fieldLabel}>
-        {label}
-      </label>
-      <div className="relative">
-        <select
-          id={id}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className={cn(fieldBase, "h-11 cursor-pointer appearance-none pr-10 text-sm")}
-        >
-          {children}
-        </select>
-        <ChevronDown
-          className="pointer-events-none absolute right-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-          aria-hidden
-        />
-      </div>
-    </div>
-  );
-}
-
-function ResultsSkeleton() {
-  return (
-    <div className="space-y-4" aria-busy="true" aria-label="Searching">
-      <div className="space-y-2">
-        <div className="h-7 w-40 animate-pulse rounded-md bg-muted" />
-        <div className="h-4 w-64 animate-pulse rounded-md bg-muted" />
-      </div>
-      <div className="divide-y divide-border overflow-hidden rounded-2xl bg-card">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="space-y-4 p-6">
-            <div className="flex justify-between">
-              <div className="h-8 w-48 animate-pulse rounded-md bg-muted" />
-              <div className="h-8 w-20 animate-pulse rounded-md bg-muted" />
-            </div>
-            <div className="h-4 w-56 animate-pulse rounded-md bg-muted" />
-            <div className="h-1.5 w-full animate-pulse rounded-sm bg-muted" />
-          </div>
-        ))}
-      </div>
-    </div>
-  );
+function fieldsFromCurl(val: string): FillFields {
+  try {
+    const p = parseCurlCommand(val).detectedParams;
+    const fields: FillFields = {
+      source: p?.fromStnCode || undefined,
+      destination: p?.toStnCode || undefined,
+      classCode: p?.classCode || undefined,
+    };
+    if (p?.journeyDate && /^d{8}$/.test(p.journeyDate)) {
+      const d = parse(p.journeyDate, "yyyyMMdd", new Date());
+      if (!isNaN(d.getTime())) fields.date = d;
+    }
+    return fields;
+  } catch {
+    return {};
+  }
 }
