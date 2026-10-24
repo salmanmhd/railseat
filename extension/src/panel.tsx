@@ -24,7 +24,7 @@ async function search(req: SearchRequest, ctx: SearchContext): Promise<SearchRes
   });
 
   try {
-    return await engine.search({ headers: {}, ...req, maxCalls: MAX_CALLS });
+    return await engine.search({ headers: {}, ...req, maxCalls: req.maxCalls ?? MAX_CALLS });
   } catch (err) {
     if (err instanceof Error && err.message.startsWith("AUTH_BLOCKED")) {
       throw new Error(

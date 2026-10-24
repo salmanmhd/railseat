@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { format } from "date-fns";
+import { addDays, format } from "date-fns";
 import { ArrowLeftRight, Calendar as CalendarIcon, ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SearchProgress, SearchResultPayload } from "@/lib/irctc-engine";
@@ -32,6 +32,10 @@ export interface SearchRequest {
   allowStitch: boolean;
   /** Also look for journeys with one change. */
   connections: boolean;
+  /** Also report direct trains that are waitlisted or RAC. */
+  includeWaitlist: boolean;
+  /** Optional cap on IRCTC requests for this search. */
+  maxCalls?: number;
 }
 
 export interface SearchContext {
@@ -97,11 +101,13 @@ const fieldBase =
 export function RailSearch({ search, session }: RailSearchProps) {
   const [source, setSource] = useState("PNBE");
   const [destination, setDestination] = useState("NDLS");
-  const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date(2026, 9, 24));
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(() => new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const [classCodes, setClassCodes] = useState<string[]>(["SL"]);
   const [preferredTime, setPreferredTime] = useState("");
-  const [quotaCode] = useState("GN");
+  const [quotaCode, setQuotaCode] = useState("GN");
+  const [nearbyDays, setNearbyDays] = useState(0);
+  const [includeWaitlist, setIncludeWaitlist] = useState(false);
   const [minCoveragePct, setMinCoveragePct] = useState(35);
   const [allowStitch] = useState(true);
 
@@ -139,43 +145,61 @@ export function RailSearch({ search, session }: RailSearchProps) {
     setProgress(null);
     setRunId((n) => n + 1);
     setSearchedRoute(
-      `${source} to ${destination} · ${selectedDate ? format(selectedDate, "EEE, d MMM") : ""} · ${classCodes
+      `${source} to ${destination} · ${selectedDate ? format(selectedDate, "EEE, d MMM") : ""}${nearbyDays > 0 ? ` ± ${nearbyDays} day` : ""} · ${classCodes
         .map((code) => CLASSES.find((c) => c.code === code)?.name ?? code)
-        .join(" & ")}`,
+        .join(" & ")}${quotaCode !== "GN" ? ` · ${QUOTAS.find((q) => q.value === quotaCode)?.label ?? quotaCode}` : ""}`,
     );
     setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 50);
 
-    const dateStr = selectedDate ? format(selectedDate, "yyyyMMdd") : "20261024";
-
     try {
       const parts: SearchResultPayload[] = [];
-      for (const classCode of classCodes) {
-        const className = CLASSES.find((c) => c.code === classCode)?.name ?? classCode;
-        const prefix = classCodes.length > 1 ? `${className}: ` : "";
-        const res = await search(
-          {
-            source,
-            destination,
-            date: dateStr,
-            classCode,
-            preferredTime,
-            quotaCode,
-            minCoveragePct,
-            allowStitch,
-            connections,
-          },
-          {
-            onNotice: setNotice,
-            signal: controller.signal,
-            onProgress: (p) => {
-              setProgress({ label: prefix + PHASE_LABELS[p.phase], done: p.done, total: p.total });
-              setResults(mergeResults([...parts, p.partial]));
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const baseDate = selectedDate ?? today;
+      // The chosen date goes first, then the days around it (never in the past).
+      const dates = [baseDate];
+      for (let n = 1; n <= nearbyDays; n++) {
+        for (const delta of [-n, n]) {
+          const d = addDays(baseDate, delta);
+          if (d >= today) dates.push(d);
+        }
+      }
+
+      outer: for (const [dateIndex, date] of dates.entries()) {
+        for (const classCode of classCodes) {
+          const className = CLASSES.find((c) => c.code === classCode)?.name ?? classCode;
+          const prefix =
+            [dates.length > 1 ? format(date, "d MMM") : "", classCodes.length > 1 ? className : ""]
+              .filter(Boolean)
+              .join(" · ") + (dates.length > 1 || classCodes.length > 1 ? ": " : "");
+          const quick = dateIndex > 0; // nearby days get a lighter scan
+          const res = await search(
+            {
+              source,
+              destination,
+              date: format(date, "yyyyMMdd"),
+              classCode,
+              preferredTime,
+              quotaCode,
+              minCoveragePct,
+              allowStitch,
+              connections: connections && !quick,
+              includeWaitlist,
+              maxCalls: quick ? NEARBY_MAX_CALLS : undefined,
             },
-          },
-        );
-        parts.push(res);
-        setResults(mergeResults(parts));
-        if (res.cancelled) break;
+            {
+              onNotice: setNotice,
+              signal: controller.signal,
+              onProgress: (p) => {
+                setProgress({ label: prefix + PHASE_LABELS[p.phase], done: p.done, total: p.total });
+                setResults(mergeResults([...parts, p.partial]));
+              },
+            },
+          );
+          parts.push(res);
+          setResults(mergeResults(parts));
+          if (res.cancelled) break outer;
+        }
       }
     } catch (err: unknown) {
       setErrorMsg(err instanceof Error ? err.message : "Something went wrong while searching.");
@@ -320,6 +344,41 @@ export function RailSearch({ search, session }: RailSearchProps) {
 
           {showMore && (
             <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <RadioPicker
+                id="quota"
+                label="Quota"
+                value={quotaCode}
+                onChange={setQuotaCode}
+                options={QUOTAS}
+              />
+              <RadioPicker
+                id="nearby"
+                label="Dates"
+                value={String(nearbyDays)}
+                onChange={(v) => setNearbyDays(Number(v))}
+                options={NEARBY_OPTIONS}
+              />
+            </div>
+            {nearbyDays > 0 && (
+              <p className="px-1 text-sm text-muted-foreground">
+                Nearby days get a lighter scan: direct trains and partial rides only, without changes.
+              </p>
+            )}
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-muted/60 p-4">
+              <input
+                type="checkbox"
+                checked={includeWaitlist}
+                onChange={(e) => setIncludeWaitlist(e.target.checked)}
+                className="mt-0.5 h-4 w-4 accent-primary"
+              />
+              <span>
+                <span className="block text-sm font-medium">Include waitlisted trains</span>
+                <span className="block text-sm text-muted-foreground">
+                  Shows direct trains that are not confirmed yet, with a rough chance of confirming.
+                </span>
+              </span>
+            </label>
             <label className="flex cursor-pointer items-start gap-3 rounded-xl bg-muted/60 p-4">
               <input
                 type="checkbox"
@@ -453,6 +512,22 @@ export function RailSearch({ search, session }: RailSearchProps) {
 
 const MAX_CLASSES = 2;
 
+// Request cap for each nearby day, which gets a lighter scan than the chosen date.
+const NEARBY_MAX_CALLS = 60;
+
+const QUOTAS = [
+  { label: "General", value: "GN" },
+  { label: "Tatkal", value: "TQ" },
+  { label: "Premium Tatkal", value: "PT" },
+  { label: "Ladies", value: "LD" },
+  { label: "Senior citizen", value: "SS" },
+];
+
+const NEARBY_OPTIONS = [
+  { label: "Only this date", value: "0" },
+  { label: "1 day either side", value: "1" },
+];
+
 const PHASE_LABELS: Record<SearchProgress["phase"], string> = {
   direct: "Checking trains",
   deep: "Looking for partial rides",
@@ -508,19 +583,31 @@ function ClassPicker({ value, onChange }: { value: string[]; onChange: (v: strin
   );
 }
 
-function TimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const current = TIME_PRESETS.find((p) => p.value === value)?.label ?? value;
+function RadioPicker({
+  id,
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  id: string;
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: { label: string; value: string }[];
+}) {
+  const current = options.find((o) => o.value === value)?.label ?? value;
 
   return (
     <DropdownMenu>
-      <PickerTrigger id="time" label="Leaving">
+      <PickerTrigger id={id} label={label}>
         {current}
       </PickerTrigger>
       <DropdownMenuContent align="start" className="w-(--radix-dropdown-menu-trigger-width) min-w-56">
         <DropdownMenuRadioGroup value={value} onValueChange={onChange}>
-          {TIME_PRESETS.map((p) => (
-            <DropdownMenuRadioItem key={p.label} value={p.value}>
-              {p.label}
+          {options.map((o) => (
+            <DropdownMenuRadioItem key={o.label} value={o.value}>
+              {o.label}
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
@@ -529,11 +616,16 @@ function TimePicker({ value, onChange }: { value: string; onChange: (v: string) 
   );
 }
 
+function TimePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return <RadioPicker id="time" label="Leaving" value={value} onChange={onChange} options={TIME_PRESETS} />;
+}
+
 function mergeResults(parts: SearchResultPayload[]): SearchResultPayload {
   return {
     matchesTime: parts.flatMap((p) => p.matchesTime),
     outsideTime: parts.flatMap((p) => p.outsideTime),
     worstCase: parts.flatMap((p) => p.worstCase),
+    waitlist: parts.flatMap((p) => p.waitlist ?? []),
     totalApiCalls: parts.reduce((n, p) => n + p.totalApiCalls, 0),
     trainsAnalyzed: parts.reduce((n, p) => n + p.trainsAnalyzed, 0),
     preferredTimeWindow: parts[0]?.preferredTimeWindow,

@@ -16,6 +16,8 @@ export async function POST(req: NextRequest) {
       minCoveragePct = 50,
       allowStitch = true,
       connections = false,
+      includeWaitlist = false,
+      maxCalls,
       customHeaders,
     } = body;
 
@@ -54,6 +56,8 @@ export async function POST(req: NextRequest) {
       minCoveragePct: Number(minCoveragePct) || 50,
       allowStitch: Boolean(allowStitch),
       connections: Boolean(connections),
+      includeWaitlist: Boolean(includeWaitlist),
+      ...(Number(maxCalls) > 0 ? { maxCalls: Number(maxCalls) } : {}),
     });
 
     console.log(`[API /api/search] Search done: ${result.matchesTime.length} in-window, ${result.outsideTime.length} out-window, ${result.worstCase.length} fallback. Calls: ${result.totalApiCalls}`);

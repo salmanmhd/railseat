@@ -1,13 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { ArrowRight, Check, Copy } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { format, parse } from "date-fns";
+import { ArrowRight, Check, ChevronDown, Copy } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { SearchOption, SearchResultPayload } from "@/lib/irctc-engine";
+import { waitlistOdds } from "@/lib/waitlist-odds";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-type TabKey = "window" | "other" | "partial";
+type TabKey = "window" | "other" | "partial" | "waitlist";
+type SortKey = "best" | "cheapest" | "fastest" | "earliest";
 
 type Tone = "good" | "warn" | "muted";
+
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: "best", label: "Best match" },
+  { key: "cheapest", label: "Cheapest" },
+  { key: "fastest", label: "Fastest" },
+  { key: "earliest", label: "Earliest departure" },
+];
 
 function describeStatus(raw: string): { label: string; tone: Tone } {
   const upper = raw.toUpperCase();
@@ -26,7 +43,46 @@ const toneClass: Record<Tone, string> = {
   muted: "text-muted-foreground",
 };
 
-const optionKey = (o: SearchOption) => `${o.trainNo}-${o.boardStn}-${o.alightStn}-${o.boardTime}`;
+const optionKey = (o: SearchOption) => `${o.journeyDate}-${o.trainNo}-${o.boardStn}-${o.alightStn}-${o.boardTime}-${o.classCode}`;
+
+// ---- sorting helpers ----
+
+/** Adds up every rupee amount in a fare string ("₹695", "₹300 + ₹410"). */
+function fareValue(fare: string): number {
+  const nums = fare.match(/\d[\d,]*(?:\.\d+)?/g)?.map((n) => parseFloat(n.replace(/,/g, "")));
+  return nums && nums.length > 0 ? nums.reduce((a, b) => a + b, 0) : Number.POSITIVE_INFINITY;
+}
+
+function durationValue(text: string): number {
+  const h = text.match(/(\d+)\s*h/i);
+  const m = text.match(/(\d+)\s*m/i);
+  return h || m ? parseInt(h?.[1] ?? "0", 10) * 60 + parseInt(m?.[1] ?? "0", 10) : Number.POSITIVE_INFINITY;
+}
+
+function sortOptions(items: SearchOption[], sort: SortKey, isWaitlist: boolean): SearchOption[] {
+  const list = [...items];
+  switch (sort) {
+    case "cheapest":
+      return list.sort((a, b) => fareValue(a.fare) - fareValue(b.fare));
+    case "fastest":
+      return list.sort((a, b) => durationValue(a.totalDuration) - durationValue(b.totalDuration));
+    case "earliest":
+      return list.sort((a, b) => (a.journeyDate + a.boardTime).localeCompare(b.journeyDate + b.boardTime));
+    default:
+      return isWaitlist
+        ? list.sort(
+            (a, b) =>
+              waitlistOdds(b.status, b.prediction).score - waitlistOdds(a.status, a.prediction).score ||
+              fareValue(a.fare) - fareValue(b.fare),
+          )
+        : list;
+  }
+}
+
+function dayLabel(ymd: string) {
+  const d = parse(ymd, "yyyyMMdd", new Date());
+  return isNaN(d.getTime()) ? ymd : format(d, "EEE, d MMM");
+}
 
 export function SearchResults({
   results,
@@ -37,32 +93,49 @@ export function SearchResults({
   windowLabel: string;
   minCoveragePct: number;
 }) {
-  const tabs: { key: TabKey; label: string; items: SearchOption[]; hint: string; empty: string }[] = [
-    {
-      key: "window",
-      label: windowLabel,
-      items: results.matchesTime,
-      hint: `Seats that are confirmed on trains leaving ${windowLabel.toLowerCase()}, covering more than ${minCoveragePct}% of your trip.`,
-      empty: `No confirmed seat found ${windowLabel.toLowerCase()}. Try another departure time, or lower the minimum trip coverage.`,
-    },
-    {
-      key: "other",
-      label: "Other times",
-      items: results.outsideTime,
-      hint: "Confirmed seats on trains that leave outside your preferred time.",
-      empty: "No confirmed seats at other times.",
-    },
-    {
-      key: "partial",
-      label: "Partial rides",
-      items: results.worstCase,
-      hint: `Confirmed seats for part of the trip (under ${minCoveragePct}%). You would need to continue another way.`,
-      empty: "No partial rides found.",
-    },
-  ];
+  const tabs = useMemo(() => {
+    const waitlist = results.waitlist ?? [];
+    const list: { key: TabKey; label: string; items: SearchOption[]; hint: string; empty: string }[] = [
+      {
+        key: "window",
+        label: windowLabel,
+        items: results.matchesTime,
+        hint: `Seats that are confirmed on trains leaving ${windowLabel.toLowerCase()}, covering more than ${minCoveragePct}% of your trip.`,
+        empty: `No confirmed seat found ${windowLabel.toLowerCase()}. Try another departure time, or lower the minimum trip coverage.`,
+      },
+      {
+        key: "other",
+        label: "Other times",
+        items: results.outsideTime,
+        hint: "Confirmed seats on trains that leave outside your preferred time.",
+        empty: "No confirmed seats at other times.",
+      },
+      {
+        key: "partial",
+        label: "Partial rides",
+        items: results.worstCase,
+        hint: `Confirmed seats for part of the trip (under ${minCoveragePct}%). You would need to continue another way.`,
+        empty: "No partial rides found.",
+      },
+    ];
+    if (waitlist.length > 0) {
+      list.push({
+        key: "waitlist",
+        label: "Waitlist",
+        items: waitlist,
+        hint: "Not confirmed yet. The chance shown is a rough estimate, so treat it as a guide only.",
+        empty: "No waitlisted trains.",
+      });
+      // Four tabs need shorter labels to fit a narrow panel.
+      list[1].label = "Other";
+      list[2].label = "Partial";
+    }
+    return list;
+  }, [results, windowLabel, minCoveragePct]);
 
   const firstWithItems = tabs.find((t) => t.items.length > 0)?.key ?? "window";
   const [active, setActive] = useState<TabKey>(firstWithItems);
+  const [sort, setSort] = useState<SortKey>("best");
   const userPicked = useRef(false);
 
   // While results stream in, follow the first tab that has something, until the user picks one.
@@ -73,6 +146,14 @@ export function SearchResults({
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const current = tabs.find((t) => t.key === active) ?? tabs[0];
+  const items = useMemo(() => sortOptions(current.items, sort, current.key === "waitlist"), [current, sort]);
+
+  // Show the date on every row once results cover more than one day.
+  const showDate = useMemo(() => {
+    const dates = new Set<string>();
+    for (const t of tabs) for (const o of t.items) dates.add(o.journeyDate);
+    return dates.size > 1;
+  }, [tabs]);
 
   const copy = (o: SearchOption) => {
     navigator.clipboard.writeText(o.trainNo.replace(" + ", ", "));
@@ -85,7 +166,7 @@ export function SearchResults({
       <div
         role="tablist"
         aria-label="Result groups"
-        className="grid grid-cols-3 gap-1 rounded-xl bg-muted p-1"
+        className="grid auto-cols-fr grid-flow-col gap-1 rounded-xl bg-muted p-1"
       >
         {tabs.map((t) => (
           <button
@@ -110,17 +191,20 @@ export function SearchResults({
         ))}
       </div>
 
-      <p className="px-1 text-sm text-muted-foreground">{current.hint}</p>
+      <div className="flex items-start justify-between gap-3 px-1">
+        <p className="text-sm text-muted-foreground">{current.hint}</p>
+        {current.items.length > 1 && <SortPicker value={sort} onChange={setSort} />}
+      </div>
 
-      {current.items.length === 0 ? (
+      {items.length === 0 ? (
         <div className="rounded-2xl bg-card px-6 py-12 text-center text-sm text-muted-foreground">
           {current.empty}
         </div>
       ) : (
         <ul className="divide-y divide-border overflow-hidden rounded-2xl bg-card">
-          {current.items.map((o) => (
+          {items.map((o) => (
             <li key={optionKey(o)}>
-              <ResultRow option={o} copied={copiedKey === optionKey(o)} onCopy={() => copy(o)} />
+              <ResultRow option={o} showDate={showDate} copied={copiedKey === optionKey(o)} onCopy={() => copy(o)} />
             </li>
           ))}
         </ul>
@@ -129,21 +213,54 @@ export function SearchResults({
   );
 }
 
+function SortPicker({ value, onChange }: { value: SortKey; onChange: (v: SortKey) => void }) {
+  const label = SORTS.find((s) => s.key === value)?.label ?? "";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Sort: ${label}`}
+          className="flex shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-sm font-medium text-primary transition-colors hover:bg-primary/10"
+        >
+          {label}
+          <ChevronDown className="h-4 w-4" aria-hidden />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-48">
+        <DropdownMenuRadioGroup value={value} onValueChange={(v) => onChange(v as SortKey)}>
+          {SORTS.map((s) => (
+            <DropdownMenuRadioItem key={s.key} value={s.key}>
+              {s.label}
+            </DropdownMenuRadioItem>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 function ResultRow({
   option: o,
+  showDate,
   copied,
   onCopy,
 }: {
   option: SearchOption;
+  showDate: boolean;
   copied: boolean;
   onCopy: () => void;
 }) {
   const status = describeStatus(o.status);
+  const isWaitlisted = !o.isStitched && status.tone === "warn";
+  const odds = isWaitlisted ? waitlistOdds(o.status, o.prediction) : null;
   const fullyUnreserved = !o.unreservedDuration || o.unreservedDuration.startsWith("0m");
   const reservedWidth = Math.max(0, Math.min(o.coveragePct, 100));
 
   return (
     <article className="space-y-4 p-5 sm:p-6">
+      {showDate && <p className="text-sm font-medium text-muted-foreground">{dayLabel(o.journeyDate)}</p>}
+
       {/* Times and price */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3 sm:gap-4">
@@ -156,7 +273,7 @@ function ResultRow({
         </div>
 
         <div className="text-right">
-          <p className="text-xl font-semibold tabular-nums">{o.fare}</p>
+          <p className="text-xl font-semibold tabular-nums">{/d/.test(o.fare) ? o.fare : "—"}</p>
           <p className={cn("text-sm font-medium", toneClass[status.tone])}>{status.label}</p>
         </div>
       </div>
@@ -175,34 +292,39 @@ function ResultRow({
         )}
       </p>
 
-      {/* Seat coverage */}
-      {o.isStitched ? (
+      {/* Seat coverage, one-change summary or waitlist chance */}
+      {odds ? (
+        <p className="text-sm">
+          <span className="font-medium">Chance of confirming: {odds.label}</span>
+          <span className="text-muted-foreground"> · {odds.detail}</span>
+        </p>
+      ) : o.isStitched ? (
         <p className="text-sm">
           <span className="font-medium">Confirmed seats on both trains</span>
           <span className="text-muted-foreground"> · {o.totalDuration} in total</span>
         </p>
       ) : (
-      <div className="space-y-2">
-        <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
-          <div className="h-full rounded-sm bg-primary" style={{ width: `${reservedWidth}%` }} />
+        <div className="space-y-2">
+          <div className="h-1.5 overflow-hidden rounded-sm bg-muted">
+            <div className="h-full rounded-sm bg-primary" style={{ width: `${reservedWidth}%` }} />
+          </div>
+          <p className="text-sm">
+            {fullyUnreserved ? (
+              <>
+                <span className="font-medium">Reserved seat for the whole trip</span>
+                <span className="text-muted-foreground"> · {o.reservedDuration}</span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium">Reserved seat for {o.reservedDuration}</span>
+                <span className="text-muted-foreground">
+                  {" "}
+                  · then {o.unreservedDuration} without one ({o.coveragePct}% of trip covered)
+                </span>
+              </>
+            )}
+          </p>
         </div>
-        <p className="text-sm">
-          {fullyUnreserved ? (
-            <>
-              <span className="font-medium">Reserved seat for the whole trip</span>
-              <span className="text-muted-foreground"> · {o.reservedDuration}</span>
-            </>
-          ) : (
-            <>
-              <span className="font-medium">Reserved seat for {o.reservedDuration}</span>
-              <span className="text-muted-foreground">
-                {" "}
-                · then {o.unreservedDuration} without one ({o.coveragePct}% of trip covered)
-              </span>
-            </>
-          )}
-        </p>
-      </div>
       )}
 
       {o.legs && o.legs.length > 0 && (

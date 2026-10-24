@@ -36,6 +36,8 @@ export interface SearchOption {
   fare: string;
   note: string;
   isStitched?: boolean;
+  /** IRCTC's own confirmation chance (0-100) for waitlisted tickets, when provided. */
+  prediction?: number;
   legs?: {
     trainNo: string;
     from: string;
@@ -55,6 +57,8 @@ export interface SearchResultPayload {
   totalApiCalls: number;
   trainsAnalyzed: number;
   preferredTimeWindow?: string;
+  /** Direct trains that are waitlisted or RAC (only when requested). */
+  waitlist?: SearchOption[];
   /** Stopped early because the request budget ran out. */
   truncated?: boolean;
   /** Stopped early because the search was cancelled. */
@@ -93,6 +97,8 @@ export interface SearchParams {
   allowStitch?: boolean;
   /** Also look for journeys with one change. */
   connections?: boolean;
+  /** Also report direct trains that are waitlisted or RAC. */
+  includeWaitlist?: boolean;
   /** Upper bound on IRCTC requests for this search. */
   maxCalls?: number;
 }
@@ -121,7 +127,7 @@ export class IRCTCSearchEngine {
   private headers: Record<string, string>;
   private apiCallsCount = 0;
   private scheduleCache = new Map<string, TrainSchedule>();
-  private availabilityCache = new Map<string, { status: string; fare: string }>();
+  private availabilityCache = new Map<string, { status: string; fare: string; prediction?: number }>();
   private trainListCache = new Map<string, IRCTCTrainItem[]>();
   private callLimit = Infinity;
 
@@ -166,9 +172,10 @@ export class IRCTCSearchEngine {
     src: string,
     dest: string,
     date: string,
-    cls = ""
+    cls = "",
+    quota = "GN"
   ): Promise<IRCTCTrainItem[]> {
-    const listKey = `${src}|${dest}|${date}|${cls}`;
+    const listKey = `${src}|${dest}|${date}|${cls}|${quota}`;
     const cachedList = this.trainListCache.get(listKey);
     if (cachedList) return cachedList;
 
@@ -181,7 +188,7 @@ export class IRCTCSearchEngine {
       destStn: dest,
       jrnyClass: cls || "",
       jrnyDate: date,
-      quotaCode: "GN",
+      quotaCode: quota,
       currentBooking: "false",
       flexiFlag: false,
       handicapFlag: false,
@@ -284,7 +291,7 @@ export class IRCTCSearchEngine {
     date: string,
     cls = "SL",
     quota = "GN"
-  ): Promise<{ status: string; fare: string }> {
+  ): Promise<{ status: string; fare: string; prediction?: number }> {
     const key = `${trainNo}|${from}|${to}|${date}|${cls}|${quota}`;
     if (this.availabilityCache.has(key)) {
       return this.availabilityCache.get(key)!;
@@ -331,9 +338,11 @@ export class IRCTCSearchEngine {
     }
 
     const data = await res.json();
+    const prediction = parseFloat(data.avlDayList?.[0]?.predictionPercentage);
     const result = {
       status: data.avlDayList?.[0]?.availablityStatus || data.errorMessage || "Unavailable",
       fare: data.totalCollectibleAmount || data.totalFare || "-",
+      prediction: Number.isFinite(prediction) ? prediction : undefined,
     };
     this.availabilityCache.set(key, result);
     return result;
@@ -525,7 +534,7 @@ export class IRCTCSearchEngine {
       const hub = hubs[i];
       ctx.onHub(i, hubs.length);
 
-      const first = (await this.fetchTrainsBetweenStations(source, hub.code, date, classCode))
+      const first = (await this.fetchTrainsBetweenStations(source, hub.code, date, classCode, quotaCode))
         .filter((t) => t.departureTime?.includes(":"))
         .slice(0, MAX_FIRST_LEGS);
       if (first.length === 0) continue;
@@ -553,7 +562,7 @@ export class IRCTCSearchEngine {
       }
 
       for (const date2 of dates) {
-        const second = (await this.fetchTrainsBetweenStations(hub.code, destination, date2, classCode)).filter(
+        const second = (await this.fetchTrainsBetweenStations(hub.code, destination, date2, classCode, quotaCode)).filter(
           (t) => t.departureTime?.includes(":")
         );
         for (const t2 of second) {
@@ -656,6 +665,7 @@ export class IRCTCSearchEngine {
       minCoveragePct = 40,
       allowStitch = true,
       connections = false,
+      includeWaitlist = false,
       maxCalls = 150,
     } = params;
 
@@ -664,6 +674,7 @@ export class IRCTCSearchEngine {
     const matchesTime: SearchOption[] = [];
     const outsideTime: SearchOption[] = [];
     const worstCase: SearchOption[] = [];
+    const waitlist: SearchOption[] = [];
     let truncated = false;
     let cancelled = false;
     let trainsAnalyzed = 0;
@@ -673,6 +684,7 @@ export class IRCTCSearchEngine {
       matchesTime: [...matchesTime].sort(byCoverage),
       outsideTime: [...outsideTime].sort(byCoverage),
       worstCase: [...worstCase].sort(byCoverage),
+      waitlist: [...waitlist],
       totalApiCalls: this.apiCallsCount,
       trainsAnalyzed,
       preferredTimeWindow: preferredTime,
@@ -687,7 +699,7 @@ export class IRCTCSearchEngine {
 
     try {
       // 1. Fetch live train list dynamically for this route
-      let liveTrains = await this.fetchTrainsBetweenStations(source, destination, date, classCode);
+      let liveTrains = await this.fetchTrainsBetweenStations(source, destination, date, classCode, quotaCode);
 
       let candidateTrains: { trainNo: string; name: string; from: string; dest: string; depTime?: string }[] = [];
 
@@ -783,9 +795,7 @@ export class IRCTCSearchEngine {
         if (!deep) {
           // Full direct journey
           const fullAvail = await this.fetchAvailability(t.trainNo, effectiveSource, effectiveDest, date, classCode, quotaCode);
-          if (this.isBookable(fullAvail.status)) {
-            place(
-              {
+          const fullOpt: SearchOption = {
                 trainNo: t.trainNo,
                 trainName: sched.trainName,
                 journeyDate: date,
@@ -805,9 +815,10 @@ export class IRCTCSearchEngine {
                 status: fullAvail.status,
                 fare: `₹${fullAvail.fare}`,
                 note: "Full direct confirmed ticket",
-              },
-              inWindow
-            );
+                prediction: fullAvail.prediction,
+          };
+          if (this.isBookable(fullAvail.status)) {
+            place(fullOpt, inWindow);
             return true;
           }
 
@@ -842,6 +853,9 @@ export class IRCTCSearchEngine {
               );
               return true;
             }
+          }
+          if (includeWaitlist && /RAC|WL/i.test(fullAvail.status)) {
+            waitlist.push({ ...fullOpt, note: "Not confirmed yet. Your seat depends on cancellations." });
           }
           return false;
         }
