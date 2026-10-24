@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { format, parse } from "date-fns";
 import { ArrowLeftRight, Calendar as CalendarIcon, ChevronDown, Train } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -78,22 +78,88 @@ export default function Home() {
   const [searchedRoute, setSearchedRoute] = useState("");
   const [showCurlDrawer, setShowCurlDrawer] = useState(false);
   const [showMore, setShowMore] = useState(false);
+  const [savedStatus, setSavedStatus] = useState<string | null>(null);
+  const [parsedSummary, setParsedSummary] = useState<{
+    hasCookie: boolean;
+    route?: string;
+    date?: string;
+    classCode?: string;
+  } | null>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+
+  const applyParsedCurl = (raw: string, autoFill = true) => {
+    try {
+      const parsed = parseCurlCommand(raw);
+      const hasCookie = Boolean(parsed.cookie || parsed.headers["Cookie"] || parsed.headers["cookie"]);
+
+      let routeText: string | undefined;
+      if (parsed.detectedParams?.fromStnCode && parsed.detectedParams?.toStnCode) {
+        routeText = `${parsed.detectedParams.fromStnCode} → ${parsed.detectedParams.toStnCode}`;
+      }
+
+      setParsedSummary({
+        hasCookie,
+        route: routeText,
+        date: parsed.detectedParams?.journeyDate,
+        classCode: parsed.detectedParams?.classCode,
+      });
+
+      if (autoFill) {
+        if (parsed.detectedParams?.fromStnCode) setSource(parsed.detectedParams.fromStnCode);
+        if (parsed.detectedParams?.toStnCode) setDestination(parsed.detectedParams.toStnCode);
+        if (parsed.detectedParams?.journeyDate && /^\d{8}$/.test(parsed.detectedParams.journeyDate)) {
+          const d = parse(parsed.detectedParams.journeyDate, "yyyyMMdd", new Date());
+          if (!isNaN(d.getTime())) setSelectedDate(d);
+        }
+        if (parsed.detectedParams?.classCode) setClassCode(parsed.detectedParams.classCode);
+      }
+      return parsed;
+    } catch {
+      setParsedSummary(null);
+      return null;
+    }
+  };
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("rail_irctc_curl");
+      if (stored) {
+        setCurlInput(stored);
+        applyParsedCurl(stored, false);
+      } else {
+        applyParsedCurl(DEFAULT_SAMPLE_CURL, false);
+      }
+    } catch {
+      // ignore in SSR / restricted storage
+    }
+  }, []);
 
   const handleCurlChange = (val: string) => {
     setCurlInput(val);
+    applyParsedCurl(val, true);
+  };
+
+  const handleSaveCurl = () => {
     try {
-      const parsed = parseCurlCommand(val);
-      if (parsed.detectedParams?.fromStnCode) setSource(parsed.detectedParams.fromStnCode);
-      if (parsed.detectedParams?.toStnCode) setDestination(parsed.detectedParams.toStnCode);
-      if (parsed.detectedParams?.journeyDate && /^\d{8}$/.test(parsed.detectedParams.journeyDate)) {
-        const d = parse(parsed.detectedParams.journeyDate, "yyyyMMdd", new Date());
-        if (!isNaN(d.getTime())) setSelectedDate(d);
-      }
-      if (parsed.detectedParams?.classCode) setClassCode(parsed.detectedParams.classCode);
+      localStorage.setItem("rail_irctc_curl", curlInput);
     } catch {
-      // ignore parse error
+      // ignore
     }
+    applyParsedCurl(curlInput, true);
+    setSavedStatus("Saved to browser");
+    setTimeout(() => setSavedStatus(null), 2500);
+  };
+
+  const handleResetCurl = () => {
+    setCurlInput(DEFAULT_SAMPLE_CURL);
+    try {
+      localStorage.removeItem("rail_irctc_curl");
+    } catch {
+      // ignore
+    }
+    applyParsedCurl(DEFAULT_SAMPLE_CURL, true);
+    setSavedStatus("Reset to default");
+    setTimeout(() => setSavedStatus(null), 2000);
   };
 
   const swapStations = () => {
@@ -166,8 +232,15 @@ export default function Home() {
               type="button"
               onClick={() => setShowCurlDrawer(!showCurlDrawer)}
               aria-expanded={showCurlDrawer}
-              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
             >
+              <span
+                className={cn(
+                  "h-2 w-2 rounded-full transition-colors",
+                  parsedSummary?.hasCookie ? "bg-emerald-500" : "bg-muted-foreground/30"
+                )}
+                aria-hidden
+              />
               IRCTC session
               <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", showCurlDrawer && "rotate-180")} aria-hidden />
             </button>
@@ -186,20 +259,75 @@ export default function Home() {
 
         {showCurlDrawer && (
           <div className="space-y-3 rounded-2xl bg-card p-5 animate-in fade-in-50 slide-in-from-top-2 duration-200">
-            <div>
-              <h2 className="text-base font-semibold">IRCTC session</h2>
-              <p className="text-sm text-muted-foreground">
-                Paste a recent request copied from your browser&apos;s Network tab (Copy as cURL). Your route, date and
-                class are filled in from it.
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+              <div>
+                <h2 className="text-base font-semibold">IRCTC session</h2>
+                <p className="text-sm text-muted-foreground">
+                  Paste a recent request copied from your browser&apos;s Network tab (Copy as cURL).
+                </p>
+              </div>
+              <div className="flex items-center gap-2 pt-1 sm:pt-0">
+                <button
+                  type="button"
+                  onClick={handleResetCurl}
+                  className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground cursor-pointer"
+                >
+                  Reset
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveCurl}
+                  className="flex h-8 items-center justify-center rounded-lg bg-primary px-3.5 text-xs font-medium text-white transition-opacity hover:opacity-90 active:scale-[0.99] cursor-pointer"
+                >
+                  {savedStatus || "Save session"}
+                </button>
+              </div>
             </div>
+
             <textarea
               rows={4}
               value={curlInput}
               onChange={(e) => handleCurlChange(e.target.value)}
+              onPaste={(e) => {
+                const pasted = e.clipboardData.getData("text");
+                if (pasted) {
+                  setTimeout(() => handleCurlChange(pasted), 10);
+                }
+              }}
               placeholder="curl --url 'https://www.irctc.co.in/...' -b '...'"
               className={cn(fieldBase, "resize-none py-3 font-mono text-xs")}
             />
+
+            {/* Validation & Detected parameters feedback */}
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex flex-wrap items-center gap-2">
+                {parsedSummary?.hasCookie ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                    Session cookie detected
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 rounded-md bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+                    No Cookie found in this cURL
+                  </span>
+                )}
+
+                {parsedSummary?.route && (
+                  <span className="text-muted-foreground">
+                    Auto-filled: {parsedSummary.route}
+                    {parsedSummary.date ? ` · ${parsedSummary.date}` : ""}
+                    {parsedSummary.classCode ? ` · ${parsedSummary.classCode}` : ""}
+                  </span>
+                )}
+              </div>
+
+              {savedStatus && (
+                <span className="text-xs font-medium text-primary">
+                  {savedStatus}
+                </span>
+              )}
+            </div>
           </div>
         )}
 

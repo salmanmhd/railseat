@@ -4,6 +4,20 @@ All notable changes to the **RailSeat Agent** (`D:\playground\rail`) project are
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+## [1.2.2] - 2026-10-24
+
+### Added
+- **Session Persistence & Save Button**:
+  - Added "Save session" button inside the IRCTC session drawer to save the active cURL to browser `localStorage` across page reloads.
+  - Added live cookie detection and route extraction indicator pills directly below the cURL textarea.
+  - Added dynamic session indicator dot on the navbar's "IRCTC session" button reflecting cookie validity.
+  - Added "Reset" button to restore default sample request when needed.
+
+### Fixed
+- **Multi-Platform cURL Parser**:
+  - Fixed Windows CMD, PowerShell, and bash cURL parameter extraction in `lib/curl-parser.ts`, resolving caret (`^`), backtick (`` ` ``), and escaped quote (`^\"`) stripping so `/altAvlEnq/TC` and `/avlFarenquiry` requests auto-fill route, date, and class immediately.
+  - Added direct cookie fallback extraction and instant `onPaste` synchronization.
+
 ## [1.2.1] - 2026-10-24
 
 ### Changed
